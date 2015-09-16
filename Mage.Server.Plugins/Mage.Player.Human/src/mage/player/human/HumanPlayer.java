@@ -168,12 +168,17 @@ public class HumanPlayer extends PlayerImpl {
 
     @Override
     public boolean chooseUse(Outcome outcome, String message, Ability source, Game game) {
+        return this.chooseUse(outcome, new MessageToClient(message), source, game);
+    }
+
+    @Override
+    public boolean chooseUse(Outcome outcome, MessageToClient message, Ability source, Game game) {
         if (source != null) {
-            Boolean answer = requestAutoAnswerId.get(source.getOriginalId() + "#" + message);
+            Boolean answer = requestAutoAnswerId.get(source.getOriginalId() + "#" + message.getMessage());
             if (answer != null) {
                 return answer;
             } else {
-                answer = requestAutoAnswerText.get(message);
+                answer = requestAutoAnswerText.get(message.getMessage());
                 if (answer != null) {
                     return answer;
                 }
@@ -181,7 +186,10 @@ public class HumanPlayer extends PlayerImpl {
         }
         updateGameStatePriority("chooseUse", game);
         do {
-            game.fireAskPlayerEvent(playerId, new MessageToClient(message, getRelatedObjectName(source, game)), source);
+            if (message.getSecondMessage() == null) {
+                message.setSecondMessage(getRelatedObjectName(source, game));
+            }
+            game.fireAskPlayerEvent(playerId, message, source);
             waitForResponse(game);
         } while (response.getBoolean() == null && !abort);
         if (!abort) {
@@ -375,7 +383,7 @@ public class HumanPlayer extends PlayerImpl {
         }
         while (!abort) {
             Set<UUID> possibleTargets = target.possibleTargets(source == null ? null : source.getSourceId(), abilityControllerId, game);
-            boolean required = target.isRequired(source);
+            boolean required = target.isRequired(source != null ? source.getSourceId() : null, game);
             if (possibleTargets.isEmpty() || target.getTargets().size() >= target.getNumberOfTargets()) {
                 required = false;
             }
@@ -477,7 +485,12 @@ public class HumanPlayer extends PlayerImpl {
     public boolean chooseTarget(Outcome outcome, Cards cards, TargetCard target, Ability source, Game game) {
         updateGameStatePriority("chooseTarget(5)", game);
         while (!abort) {
-            boolean required = target.isRequired(source);
+            boolean required;
+            if (target.isRequiredExplicitlySet()) {
+                required = target.isRequired();
+            } else {
+                required = target.isRequired(source);
+            }
             // if there is no cards to select from, then add possibility to cancel choosing action
             if (cards == null) {
                 required = false;
@@ -554,6 +567,18 @@ public class HumanPlayer extends PlayerImpl {
     public boolean priority(Game game) {
         passed = false;
         if (!abort) {
+            if (getJustActivatedType() != null) {
+                if (userData.isPassPriorityCast() && getJustActivatedType().equals(AbilityType.SPELL)) {
+                    setJustActivatedType(null);
+                    pass(game);
+                    return false;
+                }
+                if (userData.isPassPriorityActivation() && getJustActivatedType().equals(AbilityType.ACTIVATED)) {
+                    setJustActivatedType(null);
+                    pass(game);
+                    return false;
+                }
+            }
             if (passedAllTurns) {
                 if (passWithManaPoolCheck(game)) {
                     return false;
@@ -685,6 +710,8 @@ public class HumanPlayer extends PlayerImpl {
 
     @Override
     public TriggeredAbility chooseTriggeredAbility(List<TriggeredAbility> abilities, Game game) {
+        String autoOrderRuleText = null;
+        boolean autoOrderUse = getUserData().isAutoOrderTrigger();
         while (!abort) {
             // try to set trigger auto order
             List<TriggeredAbility> abilitiesWithNoOrderSet = new ArrayList<>();
@@ -693,23 +720,32 @@ public class HumanPlayer extends PlayerImpl {
                 if (triggerAutoOrderAbilityFirst.contains(ability.getOriginalId())) {
                     return ability;
                 }
-                if (triggerAutoOrderNameFirst.contains(ability.getRule())) {
+                MageObject object = game.getObject(ability.getSourceId());
+                String rule = ability.getRule(object != null ? object.getName() : null);
+                if (triggerAutoOrderNameFirst.contains(rule)) {
                     return ability;
                 }
                 if (triggerAutoOrderAbilityLast.contains(ability.getOriginalId())) {
                     abilityOrderLast = ability;
                     continue;
                 }
-                if (triggerAutoOrderNameLast.contains(ability.getRule())) {
+                if (triggerAutoOrderNameLast.contains(rule)) {
                     abilityOrderLast = ability;
                     continue;
+                }
+                if (autoOrderUse) {
+                    if (autoOrderRuleText == null) {
+                        autoOrderRuleText = rule;
+                    } else if (!rule.equals(autoOrderRuleText)) {
+                        autoOrderUse = false;
+                    }
                 }
                 abilitiesWithNoOrderSet.add(ability);
             }
             if (abilitiesWithNoOrderSet.isEmpty()) {
                 return abilityOrderLast;
             }
-            if (abilitiesWithNoOrderSet.size() == 1) {
+            if (abilitiesWithNoOrderSet.size() == 1 || autoOrderUse) {
                 return abilitiesWithNoOrderSet.iterator().next();
             }
             updateGameStatePriority("chooseTriggeredAbility", game);

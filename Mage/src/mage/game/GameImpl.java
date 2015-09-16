@@ -851,37 +851,63 @@ public abstract class GameImpl implements Game, Serializable {
         Player choosingPlayer = null;
         if (choosingPlayerId != null) {
             choosingPlayer = this.getPlayer(choosingPlayerId);
+            if (choosingPlayer != null && !choosingPlayer.isInGame()) {
+                choosingPlayer = null;
+            }
         }
         if (choosingPlayer == null) {
             choosingPlayerId = pickChoosingPlayer();
+            if (choosingPlayerId == null) {
+                return;
+            }
             choosingPlayer = getPlayer(choosingPlayerId);
+        }
+        if (choosingPlayer == null) {
+            return;
         }
         getState().setChoosingPlayerId(choosingPlayerId); // needed to start/stop the timer if active
         if (choosingPlayer != null && choosingPlayer.choose(Outcome.Benefit, targetPlayer, null, this)) {
             startingPlayerId = targetPlayer.getTargets().get(0);
-            Player startingPlayer = state.getPlayer(startingPlayerId);
-            StringBuilder message = new StringBuilder(choosingPlayer.getLogName()).append(" chooses that ");
-            if (choosingPlayer.getId().equals(startingPlayerId)) {
-                message.append("he or she");
-            } else {
-                message.append(startingPlayer.getLogName());
-            }
-            message.append(" takes the first turn");
-
-            this.informPlayers(message.toString());
-        } else {
-            // not possible to choose starting player, stop here
+        } else if (getState().getPlayers().size() < 3) {
+            // not possible to choose starting player, choosing player has probably conceded, so stop here
             return;
         }
+        if (startingPlayerId == null) {
+            // choose any available player as starting player
+            for (Player player : state.getPlayers().values()) {
+                if (player.isInGame()) {
+                    startingPlayerId = player.getId();
+                    break;
+                }
+            }
+            if (startingPlayerId == null) {
+                return;
+            }
+        }
+        Player startingPlayer = state.getPlayer(startingPlayerId);
+        if (startingPlayer == null) {
+            logger.debug("Starting player not found. playerId:" + startingPlayerId);
+            return;
+        }
+        StringBuilder message = new StringBuilder(choosingPlayer.getLogName()).append(" chooses that ");
+        if (choosingPlayer.getId().equals(startingPlayerId)) {
+            message.append("he or she");
+        } else {
+            message.append(startingPlayer.getLogName());
+        }
+        message.append(" takes the first turn");
+
+        this.informPlayers(message.toString());
 
         //20091005 - 103.3
+        int startingHandSize = 7;
         for (UUID playerId : state.getPlayerList(startingPlayerId)) {
             Player player = getPlayer(playerId);
             if (!gameOptions.testMode || player.getLife() == 0) {
                 player.initLife(this.getLife());
             }
             if (!gameOptions.testMode) {
-                player.drawCards(7, this);
+                player.drawCards(startingHandSize, this);
             }
         }
 
@@ -923,6 +949,15 @@ public abstract class GameImpl implements Game, Serializable {
             }
             saveState(false);
         } while (!mulliganPlayers.isEmpty());
+        // new scry rule
+        for (UUID playerId : state.getPlayerList(startingPlayerId)) {
+            Player player = getPlayer(playerId);
+            if (player != null && player.getHand().size() < startingHandSize) {
+                if (player.chooseUse(Outcome.Benefit, new MessageToClient("Scry 1?", "Look at the top card of your library. You may put that card on the bottom of your library."), null, this)) {
+                    player.scry(1, null, this);
+                }
+            }
+        }
         getState().setChoosingPlayerId(null);
         Watchers watchers = state.getWatchers();
         // add default watchers
@@ -970,6 +1005,7 @@ public abstract class GameImpl implements Game, Serializable {
                 }
             }
         }
+
     }
 
     protected UUID findWinnersAndLosers() {
@@ -1004,9 +1040,17 @@ public abstract class GameImpl implements Game, Serializable {
 
     protected UUID pickChoosingPlayer() {
         UUID[] players = getPlayers().keySet().toArray(new UUID[0]);
-        UUID playerId = players[rnd.nextInt(players.length)];
-        fireInformEvent(state.getPlayer(playerId).getLogName() + " won the toss");
-        return playerId;
+        UUID playerId;
+        while (!hasEnded()) {
+            playerId = players[rnd.nextInt(players.length)];
+            Player player = getPlayer(playerId);
+            if (player != null && player.isInGame()) {
+                fireInformEvent(state.getPlayer(playerId).getLogName() + " won the toss");
+                return player.getId();
+            }
+        }
+        logger.debug("Game was not possible to pick a choosing player.  GameId:" + getId());
+        return null;
     }
 
     @Override
@@ -1085,15 +1129,6 @@ public abstract class GameImpl implements Game, Serializable {
         player.drawCards(numCards - deduction, this);
     }
 
-//    @Override
-//    public void quit(UUID playerId) {
-//        if (state != null) {
-//            Player player = state.getPlayer(playerId);
-//            if (player != null && player.isInGame()) {
-//                player.quit(this);
-//            }
-//        }
-//    }
     @Override
     public synchronized void timerTimeout(UUID playerId) {
         Player player = state.getPlayer(playerId);
@@ -1463,6 +1498,7 @@ public abstract class GameImpl implements Game, Serializable {
      */
     public boolean checkTriggered() {
         boolean played = false;
+        state.getTriggers().checkStateTriggers(this);
         for (UUID playerId : state.getPlayerList(state.getActivePlayerId())) {
             Player player = getPlayer(playerId);
             while (player.isInGame()) { // player can die or win caused by triggered abilities or leave the game

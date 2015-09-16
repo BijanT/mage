@@ -296,11 +296,9 @@ public abstract class CardImpl extends MageObjectImpl implements Card {
     public SpellAbility getSpellAbility() {
         if (spellAbility == null) {
             for (Ability ability : abilities.getActivatedAbilities(Zone.HAND)) {
-                // name check prevents that alternate casting methods (like "cast [card name] using bestow") are returned here
-                // BUG #1024: Bestow bug
-                //if (ability instanceof SpellAbility && ability.toString().endsWith(getName())) {
-                if (ability instanceof SpellAbility) {
-                    spellAbility = (SpellAbility) ability;
+                if (ability instanceof SpellAbility
+                        && !((SpellAbility) ability).getSpellAbilityType().equals(SpellAbilityType.BASE_ALTERNATE)) {
+                    return spellAbility = (SpellAbility) ability;
                 }
             }
         }
@@ -365,12 +363,15 @@ public abstract class CardImpl extends MageObjectImpl implements Card {
                         game.getState().getCommand().remove((Commander) game.getObject(objectId));
                         break;
                     case STACK:
-                        StackObject stackObject = game.getStack().getSpell(getId());
+                        StackObject stackObject = game.getStack().getSpell(getSpellAbility().getId());
                         if (stackObject == null && (this instanceof SplitCard)) { // handle if half of Split cast is on the stack
                             stackObject = game.getStack().getSpell(((SplitCard) this).getLeftHalfCard().getId());
                             if (stackObject == null) {
                                 stackObject = game.getStack().getSpell(((SplitCard) this).getRightHalfCard().getId());
                             }
+                        }
+                        if (stackObject == null) {
+                            stackObject = game.getStack().getSpell(getId());
                         }
                         if (stackObject != null) {
                             game.getStack().remove(stackObject);
